@@ -91,7 +91,7 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // --- Keyword detection (simplified from earlier) ---
+    // --- Keyword detection ---
     const categories = [
       {
         key: "housing",
@@ -152,3 +152,4 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
   console.log(`VetChat backend running on port ${PORT}`)
 );
+Added real VA facility location search by ZIP/city
