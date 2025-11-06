@@ -151,5 +151,4 @@ app.post("/chat", async (req, res) => {
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
   console.log(`VetChat backend running on port ${PORT}`)
-           add location-aware API support
 );
