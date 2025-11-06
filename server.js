@@ -19,7 +19,7 @@ app.get("/", (req, res) => {
   res.send("VetChat backend is online 🪖");
 });
 
-// 🧠 Chat endpoint with multiple-topic detection
+// 🧠 Chat endpoint with multi-topic + location detection
 app.post("/chat", async (req, res) => {
   try {
     const { message } = req.body;
@@ -131,29 +131,48 @@ app.post("/chat", async (req, res) => {
           "• **Veteran Readiness & Employment (VR&E):** https://www.va.gov/careers-employment/vre/\n\n" +
           "They offer resume help, job listings, and career transition guidance.",
       },
+
+      location: {
+        patterns: [
+          /\bnear me\b/,
+          /\bin [a-z]+/i,
+          /\baround here\b/,
+          /\bclose by\b/,
+          /\bnearby\b/,
+          /\bmy area\b/,
+          /\blocally\b/,
+          /\bhere in\b/,
+          /\bwithin\b/,
+          /\bzip\b/,
+        ],
+        reply:
+          "📍 I noticed you mentioned a location. If you’d like, I can help you find **local Veteran resources near you**.\n\n" +
+          "Could you please tell me your **city or zip code**? (For example: 'Dallas, TX' or '90210')\n\n" +
+          "Once you share that, I’ll connect you to nearby shelters, clinics, or support programs.",
+      },
     };
 
-    // --- Crisis detection always comes first ---
+    // --- Crisis first ---
     if (topics.crisis.patterns.some((r) => r.test(text))) {
       return res.json({ reply: topics.crisis.reply });
     }
 
-    // --- Gather all other matching topics ---
+    // --- Gather all other triggered replies ---
     const triggeredReplies = [];
 
     for (const [key, data] of Object.entries(topics)) {
-      if (key === "crisis") continue; // skip, handled above
+      if (key === "crisis") continue;
       if (data.patterns.some((r) => r.test(text))) {
         triggeredReplies.push(data.reply);
       }
     }
 
-    // --- If one or more topics matched ---
+    // --- If matches found, combine replies ---
     if (triggeredReplies.length > 0) {
       return res.json({ reply: triggeredReplies.join("\n\n") });
     }
 
-    // --- Otherwise, normal AI chat ---
+    // --- Normal AI chat fallback ---
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: message }],
