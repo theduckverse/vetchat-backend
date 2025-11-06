@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import OpenAI from "openai";
+import fetch from "node-fetch"; // 👈 Added for API calls
 
 dotenv.config();
 
@@ -9,17 +10,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Root route
 app.get("/", (req, res) => {
   res.send("VetChat backend is online 🪖");
 });
 
-// 🧠 Chat endpoint with multi-topic + location detection
+// 🧠 Chat with location-aware responses
 app.post("/chat", async (req, res) => {
   try {
     const { message } = req.body;
@@ -27,152 +26,115 @@ app.post("/chat", async (req, res) => {
 
     const text = message.toLowerCase();
 
-    // --- Define topic patterns ---
-    const topics = {
-      crisis: {
-        patterns: [
-          /\bsuicid(e|al)\b/,
-          /\bkill myself\b/,
-          /\bwant to die\b/,
-          /\bend it all\b/,
-          /\bhurt myself\b/,
-          /\btake my life\b/,
-          /\bcan't go on\b/,
-          /\bself[\s-]?harm\b/,
-          /\bhopeless\b/,
-          /\bworthless\b/,
-        ],
-        reply:
-          "⚠️ I'm really concerned about how you're feeling. You're not alone.\n\n" +
-          "🇺🇸 **Veterans Crisis Line:** Dial **988**, then press **1**\n" +
-          "💬 Chat online: https://www.veteranscrisisline.net/get-help-now/chat/\n" +
-          "📱 Text **838255** to reach a trained responder 24/7.\n\n" +
-          "Help is always available — you deserve support and safety.",
-      },
+    // --- Detect ZIP or City ---
+    const zipMatch = text.match(/\b\d{5}\b/);
+    const cityMatch = text.match(/\bin\s([a-zA-Z\s]+?)(\.|,|$)/);
 
-      substance: {
-        patterns: [
-          /\balcohol\b/,
-          /\bdrunk\b/,
-          /\bdrinking\b/,
-          /\bdrugs?\b/,
-          /\baddict(ed|ion)?\b/,
-          /\busing again\b/,
-          /\brelapse\b/,
-          /\bdetox\b/,
-          /\brehab\b/,
-          /\bsober( living)?\b/,
-        ],
-        reply:
-          "🍃 It sounds like you might be dealing with alcohol or substance challenges.\n\n" +
-          "You can contact the **VA Substance Use Helpline** at **1-800-273-8255 (Press 1)**\n" +
-          "or visit https://www.mentalhealth.va.gov/substance-abuse/index.asp\n\n" +
-          "They offer confidential treatment programs and peer support for Veterans.",
-      },
+    // --- If user sent a ZIP or City ---
+    if (zipMatch || cityMatch) {
+      const location = zipMatch ? zipMatch[0] : cityMatch[1].trim();
 
-      housing: {
-        patterns: [
-          /\bhomeless\b/,
-          /\bhomelessness\b/,
-          /\bhousing\b/,
-          /\bshelter\b/,
-          /\bno place\b/,
-          /\bno where\b/,
-          /\bnowhere to (go|stay)\b/,
-          /\bsleep(ing)? outside\b/,
-          /\bneed (a )?home\b/,
-          /\btemporary housing\b/,
-          /\beviction\b/,
-        ],
-        reply:
-          "🏠 For housing or shelter support:\n\n" +
-          "• **VA Homeless Programs:** https://www.va.gov/homeless\n" +
-          "• **National Call Center for Homeless Veterans:** 1-877-424-3838 (available 24/7)\n\n" +
-          "They can help you find local shelters, transitional housing, or rental assistance.",
-      },
+      // Step 1: Convert to latitude/longitude
+      const geoRes = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+          location
+        )}&format=json&limit=1`
+      );
+      const geoData = await geoRes.json();
 
-      benefits: {
-        patterns: [
-          /\bbenefit(s)?\b/,
-          /\bclaim(s)?\b/,
-          /\bdisability\b/,
-          /\bcompensation\b/,
-          /\bgi bill\b/,
-          /\bfile (a )?claim\b/,
-          /\bva help\b/,
-          /\bva application\b/,
-          /\bservice connected\b/,
-          /\beducation benefit(s)?\b/,
-          /\bpension\b/,
-        ],
-        reply:
-          "💼 For VA benefits and claims assistance:\n\n" +
-          "• Visit https://www.va.gov or call **1-800-827-1000**\n" +
-          "• For GI Bill & education benefits: https://www.va.gov/education/\n\n" +
-          "They can guide you on claims, disability compensation, and educational programs.",
-      },
+      if (geoData.length > 0) {
+        const { lat, lon, display_name } = geoData[0];
 
-      jobs: {
-        patterns: [
-          /\bjob(s)?\b/,
-          /\bemployment\b/,
-          /\bcareer(s)?\b/,
-          /\bwork\b/,
-          /\bhiring\b/,
-          /\bresume\b/,
-          /\bneed a job\b/,
-          /\blooking for work\b/,
-          /\btransition(ing)? out\b/,
-        ],
-        reply:
-          "🧰 Looking for employment or career support?\n\n" +
-          "• **VA Veterans Employment Center:** https://www.va.gov/careers-employment/\n" +
-          "• **Hire Heroes USA:** https://www.hireheroesusa.org/\n" +
-          "• **Veteran Readiness & Employment (VR&E):** https://www.va.gov/careers-employment/vre/\n\n" +
-          "They offer resume help, job listings, and career transition guidance.",
-      },
+        // Step 2: Get nearby VA facilities (within ~50 miles)
+        const vaRes = await fetch(
+          `https://sandbox-api.va.gov/services/va_facilities/v0/facilities?latitude=${lat}&longitude=${lon}&radius=50`,
+          {
+            headers: {
+              "User-Agent": "VetChatApp",
+            },
+          }
+        );
+        const vaData = await vaRes.json();
 
-      location: {
-        patterns: [
-          /\bnear me\b/,
-          /\bin [a-z]+/i,
-          /\baround here\b/,
-          /\bclose by\b/,
-          /\bnearby\b/,
-          /\bmy area\b/,
-          /\blocally\b/,
-          /\bhere in\b/,
-          /\bwithin\b/,
-          /\bzip\b/,
-        ],
-        reply:
-          "📍 I noticed you mentioned a location. If you’d like, I can help you find **local Veteran resources near you**.\n\n" +
-          "Could you please tell me your **city or zip code**? (For example: 'Dallas, TX' or '90210')\n\n" +
-          "Once you share that, I’ll connect you to nearby shelters, clinics, or support programs.",
-      },
-    };
+        const facilities =
+          vaData.data?.slice(0, 5).map((f) => {
+            const name = f.attributes.name;
+            const phone = f.attributes.phone?.main || "N/A";
+            const url = f.attributes.website || "https://www.va.gov/find-locations";
+            return `🏥 **${name}**\n📞 ${phone}\n🔗 ${url}`;
+          }) || [];
 
-    // --- Crisis first ---
-    if (topics.crisis.patterns.some((r) => r.test(text))) {
-      return res.json({ reply: topics.crisis.reply });
-    }
+        const reply =
+          facilities.length > 0
+            ? `📍 **Nearby VA Resources near ${display_name}:**\n\n${facilities.join(
+                "\n\n"
+              )}`
+            : `📍 I found your location (${display_name}), but I couldn’t locate nearby VA centers right now. Try https://www.va.gov/find-locations`;
 
-    // --- Gather all other triggered replies ---
-    const triggeredReplies = [];
-
-    for (const [key, data] of Object.entries(topics)) {
-      if (key === "crisis") continue;
-      if (data.patterns.some((r) => r.test(text))) {
-        triggeredReplies.push(data.reply);
+        return res.json({ reply });
+      } else {
+        return res.json({
+          reply: `I couldn’t locate "${location}". Could you check the city or ZIP and try again?`,
+        });
       }
     }
 
-    // --- If matches found, combine replies ---
-    if (triggeredReplies.length > 0) {
-      return res.json({ reply: triggeredReplies.join("\n\n") });
+    // --- Crisis Keywords ---
+    const crisis = /\bsuicid(e|al)\b|\bkill myself\b|\bwant to die\b|\bhurt myself\b/i;
+    if (crisis.test(text)) {
+      return res.json({
+        reply:
+          "⚠️ You're not alone, and your life matters.\n\n" +
+          "🇺🇸 **Veterans Crisis Line:** Dial **988**, then press **1**\n" +
+          "💬 Chat online: https://www.veteranscrisisline.net/get-help-now/chat/\n" +
+          "📱 Text **838255** to reach a trained responder 24/7.",
+      });
     }
 
-    // --- Normal AI chat fallback ---
+    // --- Keyword detection (simplified from earlier) ---
+    const categories = [
+      {
+        key: "housing",
+        words: ["homeless", "shelter", "housing", "eviction"],
+        reply:
+          "🏠 For housing or shelter support:\n" +
+          "• **VA Homeless Programs:** https://www.va.gov/homeless\n" +
+          "• **Call 1-877-424-3838** (24/7 National Call Center for Homeless Veterans)",
+      },
+      {
+        key: "substance",
+        words: ["alcohol", "drugs", "addiction", "rehab", "detox"],
+        reply:
+          "🍃 If you’re struggling with alcohol or substance use:\n" +
+          "• **VA Substance Use Helpline:** 1-800-273-8255 (Press 1)\n" +
+          "• Learn more: https://www.mentalhealth.va.gov/substance-abuse/",
+      },
+      {
+        key: "benefits",
+        words: ["benefits", "claim", "disability", "compensation", "gi bill"],
+        reply:
+          "💼 For VA benefits and claims:\n" +
+          "• Visit https://www.va.gov or call **1-800-827-1000**",
+      },
+      {
+        key: "jobs",
+        words: ["job", "employment", "career", "resume", "work"],
+        reply:
+          "🧰 For job and career support:\n" +
+          "• **VA Employment Services:** https://www.va.gov/careers-employment\n" +
+          "• **Hire Heroes USA:** https://www.hireheroesusa.org/",
+      },
+    ];
+
+    const matches = categories
+      .filter((cat) => cat.words.some((w) => text.includes(w)))
+      .map((cat) => cat.reply);
+
+    if (matches.length > 0) {
+      return res.json({ reply: matches.join("\n\n") });
+    }
+
+    // --- Default AI fallback ---
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: message }],
@@ -186,6 +148,7 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-// 🚀 Start the server
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`VetChat backend running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`VetChat backend running on port ${PORT}`)
+);
